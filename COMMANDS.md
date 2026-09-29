@@ -330,3 +330,51 @@ PART A: Structure
 4. Functions that are hard to test in isolation (hard-coded paths, global clients,
    no dependency injection) and suggest seams.
 Output as a table: Area | File:Function | Behaviour | Test risk.
+
+
+#Github prompt - 4
+@workspace Show me, verbatim, (1) the full contents of the Liquibase changeset
+20260903_0900__ka-knowledge-graph-schema.sql, and (2) the Makefile targets related
+to the Spanner emulator (setup/start/migrate/stop) with the commands they run.
+Also list the exact enum/status values used for page_since, page_audit, and job
+(e.g., COMPLETED, RUNNING, SUCCESS, FAILED, load_type values).
+
+
+#Github prompt - 5 
+@workspace I'm an SDET setting up this repo to run LOCALLY on my Mac against the
+Spanner emulator, so I can test the incremental pipeline safely. Do NOT modify any
+files — only read the repo (Makefile, README.md, docs/, pyproject.toml, scripts/,
+src/integrations/spanner/, src/core/config.py, tests/conftest.py, .env.example if
+present) and give me exact, copy-paste steps. Cite the file each step comes from.
+
+1. Prerequisites: exact tools and versions needed (Python/uv, Docker or gcloud
+   emulator, Liquibase or whatever applies the DDL, gcloud CLI, certs). How to
+   install/verify each on macOS.
+2. Emulator: the exact Makefile targets for setup/start/migrate/stop and the
+   commands they run. Which image/port, how the instance and database are created,
+   and how the Liquibase changeset 20260903_0900__ka-knowledge-graph-schema.sql is
+   applied. How to confirm the tables and knowledge_graph property graph exist.
+3. .env for local: a complete list of variables I must set for a local run, with
+   safe values that guarantee NOTHING is written to real GCP:
+   SPANNER_EMULATOR_HOST, PROJECT_ID/SPANNER_INSTANCE/DATABASE_ID for the emulator,
+   WRITE_TO_BUCKET, WRITE_TO_SPANNER, SAVE_LOCAL, LOCAL_OUTPUT_DIR, ROOT_PAGE_ID,
+   Athena and Cortex settings. Flag any variable that, if left at its default,
+   would hit real INT/PROD resources.
+4. GCS locally: is there any supported way to run without real buckets (e.g.
+   WRITE_TO_BUCKET=false + SAVE_LOCAL=true)? What features break when
+   WRITE_TO_BUCKET=false (deletes/purge, repair_inbound_links, _load_stored_result)?
+   Would the google-cloud-storage client honour STORAGE_EMULATOR_HOST
+   (fake-gcs-server) given how GCSClient is built in gcloud_utils.py?
+5. Running: exact commands to (a) start the API locally, (b) trigger an initial
+   load for ONE specific root page ID only, (c) trigger an incremental run,
+   (d) check job status. Include curl examples or the bruno/ collection names.
+   Also: how to run the executor for only one root instead of all ATHENA_PAGES.
+6. Querying the emulator: how to run ad-hoc SQL against it (gcloud spanner
+   databases execute-sql with emulator config, or a small Python snippet using
+   the repo's get_database()).
+7. Reset: how to wipe the emulator data and re-apply the schema between test runs.
+8. Known pitfalls: REST vs gRPC transport with the emulator, CA bundle
+   (lbg-root-bundle.crt), Cortex auth (make full-pipeline), ATHENA_MCP_URL /
+   SSL_VERIFY not in Settings, and anything the README warns about.
+
+Finish with a single numbered checklist I can follow top to bottom.
