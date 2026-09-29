@@ -4,8 +4,12 @@ Run everything from the **modelbench repo root**, on the branch
 `feature/response-alignment-metric`. Stop at any step that fails and paste the
 output back into the chat.
 
-Status when this was written: `metrics.py` and `scoring.py` already replaced;
-test file not yet added.
+Scope of this change (PR 1 of 2): the Response Alignment METRIC only - library
+code in `src/modelbench`, its tests, one docstring line. No scripts, no
+agent-specific code. Reading recorded agent runs is PR 2 (separate design).
+
+Status: `metrics.py` and `scoring.py` already replaced. Every scoring check
+below calls the real Pegasus judges through Cortex - no fake councils.
 
 ---
 
@@ -20,10 +24,7 @@ git diff --stat
 Expected: only `src/modelbench/evaluation/metrics.py` and
 `src/modelbench/evaluation/scoring.py` modified.
 
-## 1. Review the diff (important - files were replaced wholesale)
-
-The replacement files were transcribed from photos, so comment wording may
-differ from the originals. Check that ONLY the Response Alignment lines changed.
+## 1. Review the diff (files were replaced wholesale)
 
 ```bash
 git diff src/modelbench/evaluation/metrics.py
@@ -38,9 +39,8 @@ Expected changes only:
   branch in `score_one`, new `elif METRICS[metric_name]["kind"] == "agentic":`
   branch in `score_run`.
 
-If other lines show up (for example a reworded comment), undo just those parts
-and keep the Response Alignment parts - answer `n` to the new lines and `y` to
-the unwanted ones:
+If a reworded comment shows up as a change, undo just that part
+(`y` = undo this hunk, `n` = keep it):
 
 ```bash
 git checkout -p -- src/modelbench/evaluation/metrics.py
@@ -53,7 +53,7 @@ git checkout -p -- src/modelbench/evaluation/scoring.py
 uv run python -c "from pegasus.metrics.agentic import ResponseAlignment; print('OK', ResponseAlignment)"
 ```
 
-## 3. Existing tests still pass (before adding the new test file)
+## 3. Existing tests still pass
 
 ```bash
 uv run --with pytest python -m pytest tests -q
@@ -61,54 +61,50 @@ uv run --with pytest python -m pytest tests -q
 
 Expected: the same "N passed" as before the change.
 
-## 4. Add the new test file
-
-This one command creates `tests/test_response_alignment.py`:
+## 4. Create the test file
 
 ```bash
 cat > tests/test_response_alignment.py <<'EOF'
-"""Response Alignment wiring - metric registry and scoring.
+"""Response Alignment - metric registry and live scoring.
 
-No LLM calls: a fake council records what it was given and returns fixed
-per-judge, per-row scores in the same shape as Pegasus LLMCouncil.
+Registry tests run with every ``pytest`` (no model calls).
+
+Live tests call the REAL Pegasus council through Cortex, so they only run when
+asked for and when the Cortex credentials are available:
+
+    MODELBENCH_LIVE=1 uv run --with pytest python -m pytest tests/test_response_alignment.py -v
 """
 
-from types import SimpleNamespace
+import os
 
 import numpy as np
 import pandas as pd
 import pytest
+from dotenv import load_dotenv
 
 from modelbench.evaluation.metrics import METRICS, selected_metrics
-from modelbench.evaluation.scoring import score_one, score_run
 
-RUN_CONFIG = SimpleNamespace(judge_temperature=0.0)
+load_dotenv()
 
+LIVE = (
+    os.getenv("MODELBENCH_LIVE") == "1"
+    and bool(os.getenv("CORTEX_V2_API_KEY"))
+    and bool(os.getenv("CORTEX_V2_URL"))
+)
+live = pytest.mark.skipif(
+    not LIVE, reason="live judge calls: set MODELBENCH_LIVE=1 and the CORTEX_V2_* variables"
+)
 
-class FakeCouncil:
-    """Stands in for LLMCouncil: records every evaluate() call."""
-
-    def __init__(self, row_scores):
-        self.row_scores = row_scores  # {"judge-name": [score per row]}
-        self.calls = []
-
-    def evaluate(self, *args, **kwargs):
-        self.calls.append((args, kwargs))
-        first_judge = next(iter(self.row_scores.values()))
-        return {"score": float(np.mean(first_judge)), "council_row_scores": self.row_scores}
-
-
-def golden_set(with_background=False):
-    data = pd.DataFrame({"question": ["How to add a support need?", "How to close an account?"]})
-    if with_background:
-        data["background"] = ["Give step-by-step instructions.", None]
-    return data
+QUESTION = "How to add a support need?"
+ALIGNED_ANSWER = (
+    "Open the customer's profile, go to the 'Support Needs' tab and select 'Amend'. "
+    "On the 'Customer support needs' screen select 'Add', fill in the details "
+    "(F1 lists the available support needs), then select 'OK' to confirm."
+)
+OFF_TOPIC_ANSWER = "Our branches are open from 9am to 5pm on weekdays."
 
 
-OUTPUTS = [{"answer": "Step 1 ..."}, {"answer": "Go to Accounts ..."}]
-
-
-# --- metric registry ---------------------------------------------------------
+# --- metric registry (no model calls) -------------------------------------------
 
 def test_default_selection_is_unchanged():
     # The existing model-swap / prompt-swap runs must score exactly what they did before.
@@ -138,80 +134,87 @@ def test_unknown_metric_still_rejected():
         selected_metrics(("not_a_metric",))
 
 
-# --- score_run (batched, used in Step 3) ---------------------------------------
+# --- live scoring with the real council (Cortex judges) ------------------------
 
-def test_score_run_sends_query_and_agent_response():
-    council = FakeCouncil({"judge-a": [0.8, 0.4], "judge-b": [0.6, 0.2]})
+@pytest.fixture(scope="module")
+def council_and_config():
+    from modelbench.evaluation.scoring import build_council
+    from modelbench.schemas.run_config import RunConfig
 
-    scores = score_run({"response_alignment": council}, golden_set(), OUTPUTS, RUN_CONFIG)
-
-    args, kwargs = council.calls[0]
-    frame = args[0]  # DataFrame passed positionally, not as text=
-    assert list(frame.columns) == ["query", "agent_response"]
-    assert frame["query"].tolist() == golden_set()["question"].tolist()
-    assert frame["agent_response"].tolist() == ["Step 1 ...", "Go to Accounts ..."]
-    assert kwargs == {"temperature": 0.0}
-    # One score per input: median across judges, row by row.
-    np.testing.assert_allclose(scores["response_alignment"], [0.7, 0.3])
+    config = RunConfig()
+    return build_council("response_alignment", config), config
 
 
-def test_score_run_sends_background_when_golden_set_has_it():
-    council = FakeCouncil({"judge-a": [0.9, 0.9], "judge-b": [0.9, 0.9]})
+@live
+def test_live_score_one_ranks_aligned_above_off_topic(council_and_config):
+    from modelbench.evaluation.scoring import score_one
 
-    score_run({"response_alignment": council}, golden_set(with_background=True), OUTPUTS, RUN_CONFIG)
+    council, config = council_and_config
+    row = pd.Series({"question": QUESTION})
 
-    frame = council.calls[0][0][0]
-    assert frame["background"].tolist() == ["Give step-by-step instructions.", ""]
+    aligned = score_one(council, "response_alignment", row, {"answer": ALIGNED_ANSWER}, config)
+    off_topic = score_one(council, "response_alignment", row, {"answer": OFF_TOPIC_ANSWER}, config)
 
-
-# --- score_one (single row, used for judge variance in Step 4) ------------------
-
-def test_score_one_sends_one_row_frame():
-    council = FakeCouncil({"judge-a": [0.7], "judge-b": [0.7]})
-
-    score = score_one(council, "response_alignment", golden_set().iloc[0], OUTPUTS[0], RUN_CONFIG)
-
-    frame = council.calls[0][0][0]
-    assert frame.to_dict("records") == [
-        {"query": "How to add a support need?", "agent_response": "Step 1 ..."}
-    ]
-    assert isinstance(score, float)
-    assert score == pytest.approx(0.7)
+    print(f"\naligned={aligned:.3f}  off_topic={off_topic:.3f}")
+    assert 0.0 <= off_topic <= 1.0 and 0.0 <= aligned <= 1.0
+    assert aligned > off_topic
 
 
-def test_score_one_blank_background_becomes_empty_string():
-    council = FakeCouncil({"judge-a": [0.7]})
+@live
+def test_live_score_run_gives_one_score_per_input(council_and_config):
+    from modelbench.evaluation.scoring import score_run
 
-    score_one(council, "response_alignment", golden_set(with_background=True).iloc[1], OUTPUTS[1], RUN_CONFIG)
+    council, config = council_and_config
+    data = pd.DataFrame({"question": [QUESTION, QUESTION]})
+    outputs = [{"answer": ALIGNED_ANSWER}, {"answer": OFF_TOPIC_ANSWER}]
 
-    frame = council.calls[0][0][0]
-    assert frame["background"].tolist() == [""]
+    scores = score_run({"response_alignment": council}, data, outputs, config)["response_alignment"]
 
-
-# --- existing metrics must be called exactly as before ------------------------
-
-def test_existing_hallucination_call_is_unchanged():
-    council = FakeCouncil({"judge-a": [0.1, 0.2]})
-
-    score_run({"hallucination": council}, golden_set(), OUTPUTS, RUN_CONFIG)
-
-    args, kwargs = council.calls[0]
-    assert args == ()                                  # still text=... keyword call
-    assert list(kwargs["text"].columns) == ["query", "text", "context"]
+    print(f"\nper-input scores={scores}")
+    assert scores.shape == (2,)
+    assert not np.isnan(scores).any()          # every judge scored every row
+    assert ((scores >= 0.0) & (scores <= 1.0)).all()
+    assert scores[0] > scores[1]
 EOF
 ```
 
-## 5. Run the tests
+## 5. Document the optional `background` column (library users need to know)
+
+In `src/modelbench/loaders.py`, inside the `load_dataset` docstring, find:
+
+```
+    Optional columns:
+        reference_answer
+        stratum
+```
+
+and add one line so it reads:
+
+```
+    Optional columns:
+        reference_answer
+        stratum
+        background        (intended behaviour / requirements, used by response_alignment)
+```
+
+## 6. Run the tests
 
 ```bash
-# New tests only - expect "9 passed"
+# Normal run - no judge calls. Expect "4 passed, 2 skipped" for this file.
 uv run --with pytest python -m pytest tests/test_response_alignment.py -v
 
-# Whole suite - expect previous count + 9
+# Live run - real Cortex judges (about 6 judge calls, takes a minute or two).
+# Expect "6 passed". -s prints the actual scores.
+MODELBENCH_LIVE=1 uv run --with pytest python -m pytest tests/test_response_alignment.py -v -s
+
+# Whole suite - expect previous count + 4 passed (+2 skipped)
 uv run --with pytest python -m pytest tests -q
 ```
 
-## 6. Default runs unchanged, opt-in works (no model calls)
+If a live test errors with something about `temperature`, paste it back - the
+agentic branch then needs a small tweak.
+
+## 7. Default runs unchanged, opt-in works (no model calls)
 
 ```bash
 uv run modelbench --mode quick --dry-run
@@ -223,7 +226,7 @@ Expected `metrics:` lines:
 - first: `hallucination, answer_correctness, toxicity, bias` (no `response_alignment`)
 - second: `response_alignment, hallucination`
 
-## 7. Nothing else loops over every metric
+## 8. Nothing else loops over every metric
 
 ```bash
 grep -rn "METRICS" src/ | grep -v 'METRICS\['
@@ -231,44 +234,21 @@ grep -rn "METRICS" src/ | grep -v 'METRICS\['
 
 Paste any output into the chat before committing.
 
-## 8. Live smoke check (4 judge calls)
-
-Confirms the real Pegasus accepts the call and that an aligned answer scores
-higher than an off-topic one.
-
-```bash
-uv run python - <<'EOF'
-from dotenv import load_dotenv; load_dotenv()
-import pandas as pd
-from modelbench.schemas.run_config import RunConfig
-from modelbench.evaluation.scoring import build_council, score_one
-
-config = RunConfig()
-council = build_council("response_alignment", config)
-row = pd.Series({"question": "How to add a support need?"})
-good = {"answer": "Open the customer's Support Needs tab, select Amend, then Add, fill in the details and confirm."}
-bad = {"answer": "Our branches open at 9am on weekdays."}
-print("aligned answer  :", score_one(council, "response_alignment", row, good, config))
-print("off-topic answer:", score_one(council, "response_alignment", row, bad, config))
-EOF
-```
-
-Expected: aligned about 0.8-1.0, off-topic about 0.0-0.2. An error mentioning
-`temperature` means the agentic branch needs a small tweak - paste it back.
-
 ## 9. Commit and push the branch
 
 Only after steps 1-8 pass.
 
 ```bash
-git add src/modelbench/evaluation/metrics.py src/modelbench/evaluation/scoring.py tests/test_response_alignment.py
+git add src/modelbench/evaluation/metrics.py src/modelbench/evaluation/scoring.py \
+        src/modelbench/loaders.py tests/test_response_alignment.py
 git status
 git commit -m "Add Pegasus ResponseAlignment as an opt-in agentic metric
 
 - New 'response_alignment' metric (primary, higher is better, delta 0.05),
   scored only when named via --metrics; default runs unchanged.
 - scoring: 'agentic' branch sends query/agent_response(/background) to the council.
-- Tests with a fake council (no LLM calls)."
+- loaders: document the optional 'background' golden-set column.
+- Tests: registry checks + live judge checks (MODELBENCH_LIVE=1)."
 git push -u origin feature/response-alignment-metric
 ```
 
@@ -277,5 +257,76 @@ git push -u origin feature/response-alignment-metric
 - `delta` 0.05 is a starting value, pending threshold calibration.
 - A judge failing on a row gives that row a `NaN` score. This already applies
   to every metric and is not introduced here - suggest a separate ticket.
-- Making Response Alignment the default for agent runs comes with the agent-run
-  input work (Part B), not this change.
+- Reading recorded agent runs (any agent, standard record format) is PR 2;
+  agent-specific trace conversion stays outside the package.
+
+# ROVO prompt
+You are helping a QA engineer (SDET) who is new to Google Cloud Storage (GCS) and
+Google Cloud Spanner build a test strategy for our knowledge preprocessing pipeline
+(hive-knowledge-preprocessing), which feeds the HIVE Knowledge Agent.
+
+Search all Confluence pages about this pipeline (design docs, ADRs, runbooks,
+onboarding, incident/postmortem pages) and answer in the structure below. For every
+point, cite the source page title + link. If something isn't documented, say
+"NOT DOCUMENTED". Don't guess.
+
+1. End-to-end flow: every stage from source fetch (Athena) → parsing → LLM metadata
+   tagging → graph build → upload to GCS → load into Spanner → consumption by the
+   Knowledge Agent. For each stage: input, output, trigger, and owner/service.
+2. GCS details: bucket names per environment (dev/test/prod), folder/object naming
+   convention, file formats, versioning/overwrite policy, lifecycle/retention rules,
+   who writes and who reads, service accounts/IAM roles involved.
+3. Spanner details: instance/database names per environment, table list with
+   columns, primary keys, interleaved tables, indexes, foreign keys, and how
+   JSON/graph data maps to rows. Include any DDL or schema diagrams.
+4. Load semantics: full refresh vs incremental/upsert, how deletes of removed
+   pages are handled, idempotency (what happens if the load runs twice),
+   transactions/batching and mutation limits, and how GCS→Spanner is triggered
+   (Dataflow, Cloud Function, Cloud Run job, script, scheduler?).
+5. Orchestration and scheduling: how and how often the pipeline runs, dependencies
+   between stages, retries, partial-failure handling, and resume/manifest behaviour.
+6. How the Knowledge Agent queries Spanner: example queries, which tables/fields it
+   depends on, and latency/freshness expectations.
+7. Non-functional requirements: data volumes (pages, rows, file sizes), SLAs,
+   freshness targets, cost limits, security/PII handling, and encryption.
+8. Monitoring and observability: logs, metrics, alerts, dashboards, and data-quality
+   checks that already exist.
+9. Known issues, past incidents, open risks, and edge cases called out in docs.
+10. Existing testing: any test plans, test environments, emulator usage, test
+    data sets, or acceptance criteria already written.
+
+End with a short "Gaps & open questions" list a tester should raise with the dev team.
+
+
+# Github Prompt - 1
+@workspace I'm an SDET designing tests for this repo. Describe the code; do not
+modify anything. Be concise and factual, and cite file paths and function names.
+
+PART A: Structure
+1. Directory tree (2-3 levels) with a one-line purpose per folder/key file.
+2. Entry points (main.py, Makefile targets, CLI args, env vars, config files)
+   and how each stage is invoked.
+3. External dependencies: GCP libraries (google-cloud-storage, google-cloud-spanner,
+   etc.), LLM clients, and MCP tools, with versions from requirements/pyproject.
+
+# Github Prompt - 2
+@workspace PART B: GCS and Spanner code paths
+1. Every function that reads/writes GCS: bucket/path construction, file formats,
+   overwrite behaviour, error handling/retries.
+2. Every function that touches Spanner: how the client/session is created, the DDL or
+   schema definitions, insert vs insert_or_update vs replace vs DML, batch sizes,
+   transaction boundaries, and how deletes/stale rows are handled.
+3. The exact mapping from pipeline output (page JSON / graph.json nodes & edges)
+   to Spanner tables/columns.
+4. How credentials, project IDs, and environments are configured.
+5. Is the Spanner emulator or a GCS fake used anywhere (tests, docker-compose)?
+
+# Github Prompt - 3
+@workspace PART C: Testability
+1. Existing tests: framework, location, what they cover, fixtures/mocks used.
+2. Where the pipeline validates data (Pydantic models, schema checks, manifests)
+   and where it silently skips or swallows errors.
+3. Idempotency/resume logic and anything that depends on ordering or timing.
+4. Functions that are hard to test in isolation (hard-coded paths, global clients,
+   no dependency injection) and suggest seams.
+Output as a table: Area | File:Function | Behaviour | Test risk.

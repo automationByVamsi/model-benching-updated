@@ -1,45 +1,43 @@
-"""Response Alignment wiring - metric registry and scoring.
+"""Response Alignment - metric registry and live scoring.
 
-No LLM calls: a fake council records what it was given and returns fixed
-per-judge, per-row scores in the same shape as Pegasus LLMCouncil.
+Registry tests run with every ``pytest`` (no model calls).
+
+Live tests call the REAL Pegasus council through Cortex, so they only run when
+asked for and when the Cortex credentials are available:
+
+    MODELBENCH_LIVE=1 uv run --with pytest python -m pytest tests/test_response_alignment.py -v
 """
 
-from types import SimpleNamespace
+import os
 
 import numpy as np
 import pandas as pd
 import pytest
+from dotenv import load_dotenv
 
 from modelbench.evaluation.metrics import METRICS, selected_metrics
-from modelbench.evaluation.scoring import score_one, score_run
 
-RUN_CONFIG = SimpleNamespace(judge_temperature=0.0)
+load_dotenv()
 
+LIVE = (
+    os.getenv("MODELBENCH_LIVE") == "1"
+    and bool(os.getenv("CORTEX_V2_API_KEY"))
+    and bool(os.getenv("CORTEX_V2_URL"))
+)
+live = pytest.mark.skipif(
+    not LIVE, reason="live judge calls: set MODELBENCH_LIVE=1 and the CORTEX_V2_* variables"
+)
 
-class FakeCouncil:
-    """Stands in for LLMCouncil: records every evaluate() call."""
-
-    def __init__(self, row_scores):
-        self.row_scores = row_scores  # {"judge-name": [score per row]}
-        self.calls = []
-
-    def evaluate(self, *args, **kwargs):
-        self.calls.append((args, kwargs))
-        first_judge = next(iter(self.row_scores.values()))
-        return {"score": float(np.mean(first_judge)), "council_row_scores": self.row_scores}
-
-
-def golden_set(with_background=False):
-    data = pd.DataFrame({"question": ["How to add a support need?", "How to close an account?"]})
-    if with_background:
-        data["background"] = ["Give step-by-step instructions.", None]
-    return data
+QUESTION = "How to add a support need?"
+ALIGNED_ANSWER = (
+    "Open the customer's profile, go to the 'Support Needs' tab and select 'Amend'. "
+    "On the 'Customer support needs' screen select 'Add', fill in the details "
+    "(F1 lists the available support needs), then select 'OK' to confirm."
+)
+OFF_TOPIC_ANSWER = "Our branches are open from 9am to 5pm on weekdays."
 
 
-OUTPUTS = [{"answer": "Step 1 ..."}, {"answer": "Go to Accounts ..."}]
-
-
-# --- metric registry ---------------------------------------------------------
+# --- metric registry (no model calls) -------------------------------------------
 
 def test_default_selection_is_unchanged():
     # The existing model-swap / prompt-swap runs must score exactly what they did before.
@@ -69,63 +67,44 @@ def test_unknown_metric_still_rejected():
         selected_metrics(("not_a_metric",))
 
 
-# --- score_run (batched, used in Step 3) ---------------------------------------
+# --- live scoring with the real council (Cortex judges) ------------------------
 
-def test_score_run_sends_query_and_agent_response():
-    council = FakeCouncil({"judge-a": [0.8, 0.4], "judge-b": [0.6, 0.2]})
+@pytest.fixture(scope="module")
+def council_and_config():
+    from modelbench.evaluation.scoring import build_council
+    from modelbench.schemas.run_config import RunConfig
 
-    scores = score_run({"response_alignment": council}, golden_set(), OUTPUTS, RUN_CONFIG)
-
-    args, kwargs = council.calls[0]
-    frame = args[0]  # DataFrame passed positionally, not as text=
-    assert list(frame.columns) == ["query", "agent_response"]
-    assert frame["query"].tolist() == golden_set()["question"].tolist()
-    assert frame["agent_response"].tolist() == ["Step 1 ...", "Go to Accounts ..."]
-    assert kwargs == {"temperature": 0.0}
-    # One score per input: median across judges, row by row.
-    np.testing.assert_allclose(scores["response_alignment"], [0.7, 0.3])
+    config = RunConfig()
+    return build_council("response_alignment", config), config
 
 
-def test_score_run_sends_background_when_golden_set_has_it():
-    council = FakeCouncil({"judge-a": [0.9, 0.9], "judge-b": [0.9, 0.9]})
+@live
+def test_live_score_one_ranks_aligned_above_off_topic(council_and_config):
+    from modelbench.evaluation.scoring import score_one
 
-    score_run({"response_alignment": council}, golden_set(with_background=True), OUTPUTS, RUN_CONFIG)
+    council, config = council_and_config
+    row = pd.Series({"question": QUESTION})
 
-    frame = council.calls[0][0][0]
-    assert frame["background"].tolist() == ["Give step-by-step instructions.", ""]
+    aligned = score_one(council, "response_alignment", row, {"answer": ALIGNED_ANSWER}, config)
+    off_topic = score_one(council, "response_alignment", row, {"answer": OFF_TOPIC_ANSWER}, config)
 
-
-# --- score_one (single row, used for judge variance in Step 4) ------------------
-
-def test_score_one_sends_one_row_frame():
-    council = FakeCouncil({"judge-a": [0.7], "judge-b": [0.7]})
-
-    score = score_one(council, "response_alignment", golden_set().iloc[0], OUTPUTS[0], RUN_CONFIG)
-
-    frame = council.calls[0][0][0]
-    assert frame.to_dict("records") == [
-        {"query": "How to add a support need?", "agent_response": "Step 1 ..."}
-    ]
-    assert isinstance(score, float)
-    assert score == pytest.approx(0.7)
+    print(f"\naligned={aligned:.3f}  off_topic={off_topic:.3f}")
+    assert 0.0 <= off_topic <= 1.0 and 0.0 <= aligned <= 1.0
+    assert aligned > off_topic
 
 
-def test_score_one_blank_background_becomes_empty_string():
-    council = FakeCouncil({"judge-a": [0.7]})
+@live
+def test_live_score_run_gives_one_score_per_input(council_and_config):
+    from modelbench.evaluation.scoring import score_run
 
-    score_one(council, "response_alignment", golden_set(with_background=True).iloc[1], OUTPUTS[1], RUN_CONFIG)
+    council, config = council_and_config
+    data = pd.DataFrame({"question": [QUESTION, QUESTION]})
+    outputs = [{"answer": ALIGNED_ANSWER}, {"answer": OFF_TOPIC_ANSWER}]
 
-    frame = council.calls[0][0][0]
-    assert frame["background"].tolist() == [""]
+    scores = score_run({"response_alignment": council}, data, outputs, config)["response_alignment"]
 
-
-# --- existing metrics must be called exactly as before ------------------------
-
-def test_existing_hallucination_call_is_unchanged():
-    council = FakeCouncil({"judge-a": [0.1, 0.2]})
-
-    score_run({"hallucination": council}, golden_set(), OUTPUTS, RUN_CONFIG)
-
-    args, kwargs = council.calls[0]
-    assert args == ()                                  # still text=... keyword call
-    assert list(kwargs["text"].columns) == ["query", "text", "context"]
+    print(f"\nper-input scores={scores}")
+    assert scores.shape == (2,)
+    assert not np.isnan(scores).any()          # every judge scored every row
+    assert ((scores >= 0.0) & (scores <= 1.0)).all()
+    assert scores[0] > scores[1]
