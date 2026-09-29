@@ -404,3 +404,67 @@ scenario ID and title, preconditions/setup, steps to execute, expected results (
 GCS, audit/watermark), pass/fail criteria, and any current status, owner, or notes
 (e.g. passed/failed/blocked, defects raised). Present as one table per scenario. Also list
 any scenarios on the page beyond these 16, and include the page's last-updated date and author.
+
+## ROVO - XRAY TEST PROMPT
+You are helping a QA engineer create Jira Xray Test issues for the HIVE Knowledge
+preprocessing pipeline (hive-knowledge-preprocessing), using the Confluence page
+"Incremental Update Integration Scenario Tests" (last modified 23 Sep 2026) as the
+ONLY source of scenario content.
+
+GOAL
+Create one Xray "Test" issue (Test Type: Manual) for EACH scenario on that page
+(Scenario 1 to 16, plus any additional scenarios on the page). Testing has NOT started,
+so do NOT record any execution results, pass/fail outcomes, or defects.
+
+FOR EACH TEST, POPULATE:
+1. Summary: "[Preprocessing][Incremental] S<number> - <scenario title from page>"
+   e.g. "[Preprocessing][Incremental] S01 - New page created under a tracked root"
+2. Description, with these headings:
+   - Objective: one sentence on what the scenario proves.
+   - Source: link to the Confluence page + scenario number.
+   - Environments: "Local (Spanner emulator) and INT".
+   - Tables/artifacts under test: list exactly what the page's Expected Results mention
+     (e.g. page, page_dependency, page_audit, page_since, GCS metadata.json / page.md / page.html).
+3. Preconditions (Xray precondition or a "Preconditions" section):
+   - Local Setup: copy verbatim from the page.
+   - INT Setup: copy verbatim from the page.
+   - Common: "Initial load completed for the target ATHENA_PAGES root (COMPLETED
+     watermark exists in page_since). Test pages are created inside the QA test area
+     and titled with the prefix QA-ZX91."
+4. Test Steps (Xray step table: Action | Data | Expected Result). Split the page's
+   content into small, checkable steps, for example:
+   - Step 1: Record the baseline. Action: capture the current page / page_dependency /
+     page_since rows for the target page_id. Expected: baseline recorded.
+   - Step 2: Perform the Athena change described in INT Setup. Data: page_id / title.
+     Expected: Athena shows the new revision.
+   - Step 3: Trigger the pipeline (POST /api/v1/jobs/incremental via Bruno).
+     Expected: job reaches SUCCESS.
+   - Then ONE step per expected result on the page, grouped as Spanner, GCS, and
+     Audit/Watermark, each with its own Expected Result copied from the page.
+   - Final step: "Verify no unrelated pages were modified (row counts vs baseline)".
+5. Pass/Fail criteria: copy verbatim from the page into the description under
+   "Acceptance Criteria".
+6. Fields:
+   - Project: <PROJECT_KEY>
+   - Labels: preprocessing-pipeline, incremental-load, spanner, gcs, hive-ka, regression
+   - Component: <component, if any>
+   - Priority: High for scenarios 1, 2, 3, 4, 5, 9, 13, 16; Medium for the rest
+   - Fix Version: <version, if any>
+   - Assignee: <your name>
+   - Link each Test to story <STORY_KEY> with link type "tests"
+7. Group them: add all Tests to a Test Set named "Preprocessing Pipeline - Incremental
+   Update Scenarios", and to Test Plan <TEST_PLAN_KEY, if one exists>.
+
+RULES
+- Use only content from the Confluence page. Don't invent expected results. If a field
+  is missing on the page, write "TBD - not documented on source page".
+- Keep technical names (tables, columns, APIs) exactly as written on the page.
+- Don't create Test Executions and don't set any status other than the default (To Do).
+- Don't create duplicates: first search <PROJECT_KEY> for existing Tests whose summary
+  contains "[Preprocessing][Incremental]" and skip any that already exist.
+
+PROCESS (IMPORTANT)
+1. FIRST, show me a preview table only: Scenario # | Proposed Summary | Priority |
+   Number of steps | Any "TBD" fields. Show the full step table for Scenario 1 as a sample.
+2. Wait for my reply. Create the issues ONLY after I reply "CONFIRM".
+3. After creating them, return a table: Scenario # | Jira key | Summary | Link.
