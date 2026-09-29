@@ -498,3 +498,12 @@ FROM page_since ORDER BY ingested_at DESC LIMIT 10;
 -- Q6: Existing failures (candidates for S9 / S16)
 SELECT page_id, job_run_id, load_type, error_details, ingested_at
 FROM page_audit WHERE status = 'failed' ORDER BY ingested_at DESC LIMIT 10;
+
+
+SELECT table_name, column_name, spanner_type
+FROM information_schema.columns
+WHERE table_name IN ('page','page_dependency','page_since','page_audit')
+ORDER BY table_name, ordinal_position;
+
+SELECT load_type, status, COUNT(*) AS n
+FROM page_audit GROUP BY load_type, status ORDER BY 1,2;
