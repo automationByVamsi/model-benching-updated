@@ -394,3 +394,13 @@ C. Is there any exclusion mechanism (deny-list of page IDs/paths, tag, page_type
    that would stop the deployed INT pipeline from ingesting a specific subtree?
 D. For links from a test page to pages OUTSIDE the scoped subtree, what
    target_source / is_broken / dependency_page_id values get written?
+
+
+
+# ROVO prompting
+Open the Confluence page "Incremental Update Integration Scenario Tests" (HIVE Knowledge
+Agent / preprocessing pipeline). For EACH of the 16 scenarios (a–p), give me verbatim:
+scenario ID and title, preconditions/setup, steps to execute, expected results (Spanner,
+GCS, audit/watermark), pass/fail criteria, and any current status, owner, or notes
+(e.g. passed/failed/blocked, defects raised). Present as one table per scenario. Also list
+any scenarios on the page beyond these 16, and include the page's last-updated date and author.
