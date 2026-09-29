@@ -468,3 +468,33 @@ PROCESS (IMPORTANT)
    Number of steps | Any "TBD" fields. Show the full step table for Scenario 1 as a sample.
 2. Wait for my reply. Create the issues ONLY after I reply "CONFIRM".
 3. After creating them, return a table: Scenario # | Jira key | Summary | Link.
+
+
+## Queries to execute in Spanner Studio
+
+-- Q1: Is the test area already in Spanner? (gives us page IDs)
+SELECT page_id, title, page_type, revision, path, ingested_at
+FROM page
+WHERE LOWER(path) LIKE '%test_area%'
+   OR title IN ('Test Area','Parent A','Parent B','Child AA','Child B','Child C','QE','Sanity Tests')
+ORDER BY path;
+
+-- Q2: What link types exist
+SELECT type, COUNT(*) AS n, COUNTIF(is_broken) AS broken
+FROM page_dependency GROUP BY type ORDER BY n DESC;
+
+-- Q3: Most common link targets (confirms the '00000' external placeholder)
+SELECT dependency_page_id, COUNT(*) AS n
+FROM page_dependency GROUP BY dependency_page_id ORDER BY n DESC LIMIT 5;
+
+-- Q4: Audit values actually used on INT
+SELECT job_type, load_type, status, COUNT(*) AS n
+FROM page_audit GROUP BY job_type, load_type, status ORDER BY 1,2,3;
+
+-- Q5: Latest watermarks / runs
+SELECT page_id, job_run_id, status, since_time, watermark_time, ingested_at
+FROM page_since ORDER BY ingested_at DESC LIMIT 10;
+
+-- Q6: Existing failures (candidates for S9 / S16)
+SELECT page_id, job_run_id, load_type, error_details, ingested_at
+FROM page_audit WHERE status = 'failed' ORDER BY ingested_at DESC LIMIT 10;
