@@ -378,3 +378,19 @@ present) and give me exact, copy-paste steps. Cite the file each step comes from
    SSL_VERIFY not in Settings, and anything the README warns about.
 
 Finish with a single numbered checklist I can follow top to bottom.
+
+
+## Setup prompt
+@workspace Additional questions, read-only, cite files:
+A. Can initial/incremental runs be scoped to a page that is NOT a top-level
+   business-area root (e.g. a child "test area" page several levels deep)?
+   How does subtree filtering work (tree path prefix?) and will pages outside
+   that subtree be ignored entirely, including during incremental /find polling
+   and archive/delete handling?
+B. Does the pipeline skip or treat differently pages that are draft, unpublished,
+   restricted, or deleted (page_metadata.draft_state / unpublished / deleted)?
+   Where is that decided?
+C. Is there any exclusion mechanism (deny-list of page IDs/paths, tag, page_type)
+   that would stop the deployed INT pipeline from ingesting a specific subtree?
+D. For links from a test page to pages OUTSIDE the scoped subtree, what
+   target_source / is_broken / dependency_page_id values get written?
