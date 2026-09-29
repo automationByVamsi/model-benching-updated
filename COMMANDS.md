@@ -507,3 +507,12 @@ ORDER BY table_name, ordinal_position;
 
 SELECT load_type, status, COUNT(*) AS n
 FROM page_audit GROUP BY load_type, status ORDER BY 1,2;
+
+
+
+#CLI
+gcloud spanner databases execute-sql hive-int-context-layer-db \
+  --instance=ew2-int-wrk01-spi-ka-spanner \
+  --project=wrk-int-wrk01-svp-dfadf4 \
+  --sql="SELECT page_id, revision, ingested_at FROM page WHERE page_id = '43609'" \
+  --format=json
