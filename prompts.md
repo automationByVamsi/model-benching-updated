@@ -195,3 +195,32 @@ Rules: be concise and concrete, and prefer real examples over abstract descripti
 3. EVALUATION CODE: any eval scripts, metrics, LLM-as-judge setup, or scoring logic.
 4. LOGGING/TRACING: what gets logged or traced per request (useful for checking results stage by stage).
 5. GAPS: your honest assessment of what is missing for a solid test dataset.
+
+
+## Prompt updated
+I’m preparing to evaluate an Athena preprocessing pipeline and need a simple understanding of how it works.
+
+Please inspect the relevant repositories and Confluence pages. Do not change any files or configuration.
+
+Explain, in plain language:
+
+1. What starts the preprocessing pipeline?
+2. What are the main steps from Athena page to stored data?
+3. What metadata does the LLM extract?
+4. Where is the data stored in Spanner and Cloud Storage?
+5. How does the knowledge agent use this data?
+6. What tests, monitoring, or validation already exist?
+
+For every answer:
+
+- Cite the repository file path, function, or Confluence page.
+- Clearly label it as Confirmed, Inferred, or Unknown.
+- Do not guess or invent missing details.
+- Do not include secrets or credentials.
+
+Keep the response concise, ideally under two pages.
+
+End with:
+
+- The five most important things I still need to learn.
+- The five most important questions I should ask the engineering team.
